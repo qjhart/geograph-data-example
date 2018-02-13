@@ -1,0 +1,270 @@
+** Countries
+
+Here's an example of creating a set of example country boundaries.  The
+properties, include their bouding circle, and a small example boundary, centered
+at the interior circle point, and scaled to 1.
+
+#+header: :engine postgresql
+#+header: :database social_graph
+#+BEGIN_SRC sql
+\set json `tr -d "\n" < countries.geo.json`
+
+create table countries as
+with j as (
+ select jsonb_array_elements(j->'features') as f
+ from (VALUES (:'json'::jsonb)) as v(j)
+),
+g as (
+ select f->>'id' as code,
+ st_transform(st_setsrid(st_geomfromGeoJSON((f->'geometry')::text),4269),3785) as boundary
+ from j
+),
+c as (
+select code,
+st_minimumBoundingRadius(boundary) as r,
+st_minimumBoundingCircle(boundary) as circle,
+boundary
+from g
+)
+select
+code,(r).center,(r).radius,
+circle,
+--st_scale(st_translate(circle,-st_x((r).center),-st_y((r).center)),1/(r).radius,1/(r).radius) as circle,
+st_snaptogrid(st_scale(st_translate(boundary,-st_x((r).center),-st_y((r).center)),
+              100/(r).radius,100/(r).radius),1) as boundary from c;
+
+alter table countries add gid serial primary key;
+
+#+END_SRC
+
+#+RESULTS:
+| SELECT 180  |
+|-------------|
+| ALTER TABLE |
+
+** Example Countries
+
+
+Now from this, we can create an idea of what our input data would look like.
+Here we show all the countries at 1/2 scale, in the location that they would be.
+This is just a good example, but the geojson is nice as well for a test.
+
+#+header: :engine postgresql
+#+header: :database social_graph
+#+BEGIN_SRC sql
+
+CREATE OR REPLACE FUNCTION country_circle_features(countries int[],scale float)
+RETURNS setof jsonb
+AS $$
+SELECT jsonb_build_object(
+  'type','Feature',
+  'id',gid,
+  'geometry',ST_AsGeoJSON(st_transform(
+    st_translate(st_transscale(circle,-st_x(center),-st_y(center),$2,$2),st_x(center),st_y(center))
+   ,4269))::jsonb,
+  'properties', jsonb_build_object (
+    'code',code,
+    'boundary',(ST_AsGeoJSON(boundary))::jsonb,
+    'fill-opacity','0')
+  ) AS feature
+from countries join unnest($1) as c(gid) using (gid);
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION country_boundary_features(countries int[],scale float)
+RETURNS setof jsonb
+AS $$
+SELECT jsonb_build_object(
+  'type','Feature',
+  'id',code,
+  'geometry',ST_AsGeoJSON(st_transform(
+    st_translate(st_scale(boundary,radius*$2/100,radius*$2/100),st_x(center),st_y(center))
+   ,4269))::jsonb,
+  'properties', jsonb_build_object ('code',code,'fill-opacity','0.5')
+  ) AS feature
+from countries join unnest($1) as c(gid) using (gid);
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION country_features(countries int[],scale float)
+RETURNS setof jsonb
+AS $$
+select  country_circle_features(countries,scale) as f
+union
+select country_boundary_features(countries,scale)
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION makeFC(features jsonb[],out featurecollection jsonb)
+AS $$
+with
+f as (select unnest($1) as feature)
+SELECT
+jsonb_build_object('type','FeatureCollection',
+'features', jsonb_agg(feature)
+)
+FROM f;
+$$ LANGUAGE SQL;
+#+END_SRC
+
+#+RESULTS:
+
+And Here is a nice example of those data.
+
+#+header: :engine postgresql
+#+header: :database social_graph
+#+BEGIN_SRC sql
+
+create temp table countries_ex as
+with c as (
+ select array_agg(gid) as list
+ from countries
+ where code not in ('FJI','ATA','RUS')
+),
+f as (
+ select array_agg(country_features) as features
+ from c,country_features(list,0.5)
+)
+select makeFC(features) from f;
+
+\COPY countries_ex to 'countries_example.geojson'
+
+#+END_SRC
+
+#+RESULTS:
+| SELECT 1 |
+|----------|
+| COPY 1   |
+
+*** Manufactored Example
+
+Using a small manufactored example
+
+#+header: :engine postgresql
+#+header: :database social_graph
+#+BEGIN_SRC sql
+
+CREATE FUNCTION node_to_country(IN node geometry(point),IN gid int,out ls geometry(linestring))
+AS $$
+select st_makeline(node,c.center) as ls
+from countries c where gid=$2;
+$$ LANGUAGE SQL;
+
+#+END_SRC
+
+#+RESULTS:
+| CREATE FUNCTION |
+|-----------------|
+
+#+header: :engine postgresql
+#+header: :database social_graph
+#+BEGIN_SRC sql
+
+CREATE FUNCTION random_countries(cnt int)
+RETURNS TABLE(gid int)
+AS $$
+with c as (
+ select count(*) as num from countries
+)
+select
+(random()*num)::int as gid
+from c,
+generate_series(1,$1);
+$$ LANGUAGE SQL;
+
+CREATE FUNCTION random_node(center geometry(point),radius float)
+RETURNS geometry(point)
+AS $$
+with r as (
+ select random()*radius as rad,random()*2*pi() as ang
+)
+select st_makepoint(st_x(center)+cos(ang)*rad,st_y(center)+sin(ang)*rad)
+from r;
+$$ LANGUAGE SQL;
+
+CREATE FUNCTION random_node(code text)
+RETURNS geometry(point)
+AS $$
+with r as (
+ select center,random()*radius as rad,random()*2*pi() as ang
+ from countries where code=$1
+)
+select st_makepoint(st_x(center)+cos(ang)*rad,st_y(center)+sin(ang)*rad)
+from r;
+$$ LANGUAGE SQL;
+
+
+CREATE FUNCTION random_country_line(IN code text,out node geometry(point),out gid int,out ls geometry(linestring))
+AS $$
+with r as (
+ select center,random()*radius as rad,random()*2*pi() as ang
+ from countries where code=$1
+),
+p as (
+select st_makepoint(st_x(center)+cos(ang)*rad,st_y(center)+sin(ang)*rad) as node
+from r
+),
+c as ( select * from random_countries(1) join countries using (gid) )
+select node,gid,st_makeline(node,c.center) as ls
+from p,c;
+$$ LANGUAGE SQL;
+#+END_SRC
+
+#+header: :engine postgresql
+#+header: :database social_graph
+#+BEGIN_SRC sql
+
+	CREATE OR REPLACE FUNCTION circle_intersection(
+	 center geometry(point),
+	 radius float,
+	 line geometry(linestring),
+	 OUT intersection geometry(point) )
+	AS $$
+	DECLARE
+		m float;
+	  s geometry(point);
+    e geometry(point);
+	BEGIN
+    s=st_startPoint(line);
+    e=st_endPoint(line);
+	  m := (st_y(e)-st_y(s))/(st_x(e)-st_x(s)) ;
+    intersection:=e;
+	RETURN;
+	END;
+	$$
+	LANGUAGE 'plpgsql' IMMUTABLE;
+
+#+END_SRC
+
+
+#+RESULTS:
+| CREATE FUNCTION |
+|-----------------|
+
+#+header: :engine postgresql
+#+header: :database social_graph
+#+BEGIN_SRC sql
+\set us_nodes `tr -d "\n" < us_nodes.geojson`
+
+with j as (
+ select jsonb_array_elements(j->'features') as f
+ from (VALUES (:'us_nodes'::jsonb)) as v(j)
+),
+g as (
+ select f->'properties' as properties,
+ st_transform(st_setsrid(st_geomfromGeoJSON((f->'geometry')::text),4269),3785) as point
+ from j
+),
+l as ( select
+	properties->>'name'||'->'||(properties->>'country')::text as id,
+   node_to_country(point,gid) as ls
+from g join countries on (properties->>'country'=code)
+)
+select  id,st_asEWKT(circle_intersection(center,radius,ls))
+from l,countries
+where code='USA';
+#+END_SRC
+
+#+RESULTS:
+| id             | st_asewkt                                          |
+|----------------+----------------------------------------------------|
+| Foothills->FRA | SRID=3785;POINT(288096.013524153 5685008.36558243) |
+| Sisq->GBR      | SRID=3785;POINT(-426549.70100734 7267826.70247006) |
+| WY->ITA        | SRID=3785;POINT(1286544.86840122 5125609.96462147) |

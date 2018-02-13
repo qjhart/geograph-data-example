@@ -1,0 +1,68 @@
+{
+  "type": "FeatureCollection",
+	"radius": {
+	 "type": "LineString",
+         "coordinates": [
+          [
+            -114.9169921875,
+            40.54720023441049
+          ],
+          [
+            -96.767578125,
+            40.74725696280421
+          ]]
+					},
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "marker-color": "#4eb61f",
+        "marker-size": "medium",
+        "marker-symbol": "circle",
+        "name": "Sisq",
+        "country": "GBR"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.2119140625,
+          41.64007838467894
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Foothills",
+        "marker-color": "#4eb61f",
+        "marker-size": "medium",
+        "marker-symbol": "circle",
+        "country": "FRA"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -120.4541015625,
+          37.82280243352756
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "WY",
+        "marker-color": "#4eb61f",
+        "marker-size": "medium",
+        "marker-symbol": "circle",
+        "country": "ITA"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -107.70996093749999,
+          41.541477666790286
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+#+header: :engine postgresql
+#+header: :database social_graph
+#+BEGIN_SRC sql
+	\set us_nodes `tr -d "\n" < us_nodes.geojson`
+
+	create or replace view us_nodes_center as
+	select
+	st_startpoint(l) as center,
+	sqrt((st_x(st_endpoint(l))-st_x(st_startpoint(l)))^2+
+			 (st_y(st_endpoint(l))-st_y(st_startpoint(l)))^2) as radius
+	from st_transform(st_setsrid(st_geomfromGeoJSON(:'us_nodes'::jsonb->>'radius'),4269),3785) as r(l);
+
+	create temp table node_circle_intersection as
+	with j as (
+	 select jsonb_array_elements(j->'features') as f
+	 from (VALUES (:'us_nodes'::jsonb)) as v(j)
+	),
+	g as (
+	 select f->'properties' as properties,
+	 st_transform(st_setsrid(st_geomfromGeoJSON((f->'geometry')::text),4269),3785) as point
+	 from j
+	),
+	l as ( select
+		properties->>'name'||'->'||(properties->>'country')::text as id,
+		 properties,
+		 node_to_country(point,gid) as ls
+		 from g join countries on (properties->>'country'=code)
+	)
+	select jsonb_build_object(
+		'type','Feature',
+		'id',id,
+		'geometry',ST_AsGeoJSON(st_transform(circle_intersection(center,radius,ls,0),4269))::jsonb,
+		'properties', properties
+		) AS feature
+	from l,us_nodes_center
+	union
+	select jsonb_build_object(
+		'type','Feature',
+		'id','map',
+		'geometry',st_asGeoJSON(st_transform(st_buffer(center,radius),4269))::jsonb,
+		'properties',json_build_object(
+			'center',st_asGeoJSON(center)::jsonb,
+			'radius',radius))
+	from us_nodes_center ;
+
+	\COPY (select makeFC(array_agg(feature)) from node_circle_intersection) to node_circle_intersection.geojson;
+
+#+END_SRC
+
+#+RESULTS:
+| CREATE VIEW |
+|-------------|
+| SELECT 4    |
+| COPY 1      |
